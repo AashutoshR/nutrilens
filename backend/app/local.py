@@ -141,8 +141,13 @@ async def vision_models() -> dict:
     return {"running": True, "models": models}
 
 
+# Shown when another app (usually a game) leaves the AI too little of the graphics card to answer in time.
+TOO_SLOW = ("Photo analysis is very slow right now because another app, such as a game, is using your graphics card. "
+            "Close or pause it, then try again.")
+
+
 async def structured(system: str, text: str, output: type[T], image_b64: str | None = None,
-                     max_tokens: int = 1200) -> T:
+                     max_tokens: int = 1200, deadline: float = 120) -> T:
     """One call constrained to `output`'s JSON schema.
 
     Retries once on an unreadable answer, and once on the CPU if the GPU runs out of memory.
@@ -162,7 +167,8 @@ async def structured(system: str, text: str, output: type[T], image_b64: str | N
     for attempt in range(2):  # a second try only when the first answer was unreadable
         body["options"] = _options(max_tokens)
         try:
-            async with _busy, httpx.AsyncClient(timeout=900) as http:
+            # Past the deadline the request is dropped, which also stops Ollama working on it.
+            async with _busy, httpx.AsyncClient(timeout=httpx.Timeout(deadline, connect=10)) as http:
                 started = time.monotonic()
                 r = await http.post(f"{settings.ollama_host}/api/chat", json=body)
                 log.info("AI answered in %.0f s on the %s", time.monotonic() - started, "CPU" if _use_cpu() else "GPU")
@@ -172,7 +178,8 @@ async def structured(system: str, text: str, output: type[T], image_b64: str | N
             log.error("Can't reach Ollama at %s", settings.ollama_host)
             raise LocalAIError(UNAVAILABLE, 503, "local_offline") from e
         except httpx.TimeoutException as e:
-            raise LocalAIError("The AI took too long to look at this photo. Please try again.", 504) from e
+            log.warning("Ollama didn't answer within %d s (the GPU is probably busy with another app)", deadline)
+            raise LocalAIError(TOO_SLOW, 504, "local_slow") from e
         if r.status_code == 404:
             log.error("The model %s isn't installed in Ollama (run: ollama pull %s)", local_model(), local_model())
             raise LocalAIError(UNAVAILABLE, 503, "local_model_missing")

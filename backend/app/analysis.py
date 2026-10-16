@@ -20,7 +20,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from . import ai, foods, gemini, insights, local
-from .config import provider
+from .config import gemini_key, provider
 from .knowledge import ALLERGENS
 from .nutrition import daily_targets, evaluate
 from .schemas import DetectedItem, ItemInput, Nutrients, Profile
@@ -68,11 +68,22 @@ dish_name: a short name for the whole meal. cuisine: the closest cuisine, or "Mi
 If there is no food or drink in the photo, set is_food to false and return no items."""
 
 
+# A warm model on a free GPU answers in about 10 s; much longer means another app has the GPU.
+LOCAL_DEADLINE = 75
+
+
 async def look(image: bytes, media_type: str) -> Perception:
     b64 = base64.standard_b64encode(image).decode("ascii")
     if provider() == "local":
-        return await local.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64, max_tokens=900)
-    if provider() == "gemini":
+        try:
+            return await local.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64,
+                                          max_tokens=900, deadline=LOCAL_DEADLINE)
+        except local.LocalAIError as e:
+            # With a Gemini key set, a busy or stopped graphics card falls back to Gemini instead of failing.
+            if not gemini_key() or e.code not in ("local_slow", "local_offline", "local_out_of_memory"):
+                raise
+            log.warning("Local AI unavailable (%s); using Gemini for this photo", e.code)
+    if provider() in ("local", "gemini"):
         return await gemini.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64, media_type, 900)
     content = [
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
