@@ -170,7 +170,7 @@ def describe(dish_name: str, cuisine: str, meal_type: str, items: list[DetectedI
         "diet_compatibility": insights.diet_checks(profile.diets, texts, totals),
         "health_score": insights.score_meal(totals, texts, meal_kcal),
         "health_summary": insights.summarize(totals, evaluation["nutrients"], texts),
-        "healthier_swaps": insights.swaps(totals, texts, profile.diets),
+        "healthier_swaps": insights.swaps(totals, texts, profile.diets, items, cuisine),
         "data_source": "USDA FoodData Central",
     }
     return {"analysis": analysis, "evaluation": evaluation}

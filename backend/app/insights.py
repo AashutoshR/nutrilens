@@ -190,22 +190,75 @@ def summarize(totals: dict, rows: list[dict], texts: list[str]) -> str:
     return f"{first} {second}"
 
 
-def swaps(totals: dict, texts: list[str], diets: list[str]) -> list[str]:
+_FRIED = r"\b(vada|wada|pakora|pakoda|bhaji|bajji|samosa|kachori|bonda|puri|poori|bhatura|fries|fried|fritter|" \
+         r"tempura|nugget|katsu|schnitzel|chips|crisps|churro|jalebi|spring roll)"
+_BREAD = r"\b(pav|bun|roll|bread|baguette|bagel|naan|kulcha|toast|croissant|sandwich|burger|pita|tortilla|wrap)"
+
+
+def _amount(item, nutrient: str) -> float:
+    return item.estimated_grams * getattr(item.per_100g, nutrient) / 100
+
+
+def _top(items, nutrient: str):
+    best = max(items, key=lambda i: _amount(i, nutrient), default=None)
+    return (best, _amount(best, nutrient)) if best else (None, 0.0)
+
+
+def swaps(totals: dict, texts: list[str], diets: list[str], items: list | None = None, cuisine: str = "") -> list[str]:
+    """Suggestions written for this meal: they name the food behind each problem, most impactful first."""
     text = " ".join(texts).lower()
+    items = [i for i in (items or []) if i.estimated_grams > 0]
     veg_ok = "vegan" in diets or "vegetarian" in diets
-    out = []
-    if re.search(_PROCESSED, text):
-        out.append("Swap half the cured meat for beans, hummus or roast vegetables to cut the salt."
-                   if veg_ok else "Swap some cured meat for roast chicken or smoked salmon to cut the salt.")
-    if re.search(_REFINED, text):
-        out.append("Choose wholegrain or sourdough bread for more fiber and steadier energy.")
-    if totals["fiber_g"] < 4 and not re.search(_VEG_FRUIT, text):
-        out.append("Add a side salad or a handful of vegetables for fiber and vitamins.")
-    elif totals["fiber_g"] < 4:
-        out.append("Add more vegetables, fruit or a handful of chickpeas for fiber.")
-    if totals["sugar_g"] > 20 or re.search(_SWEET, text):
-        out.append("Keep sweet extras like honey or dessert to a small spoonful, or swap for fresh fruit.")
+    indian = cuisine.lower() in ("indian", "bengali")
+    out: list[tuple[float, str]] = []  # (impact, suggestion)
+
+    for i in items:
+        name = i.name.strip()
+        if re.search(_FRIED, name.lower()) and _amount(i, "fat_g") >= 4:
+            out.append((_amount(i, "fat_g") * 2, f"The {name.lower()} is deep-fried. An air-fried or baked version keeps "
+                                                 f"the taste with far less oil (about {round(_amount(i, 'fat_g'))} g of fat here)."))
+            break
+
+    meat = [i for i in items if re.search(_PROCESSED, i.name.lower())]
+    if meat or re.search(_PROCESSED, text):
+        what = meat[0].name.lower() if meat else "cured meat"
+        out.append((25, f"Swap half the {what} for beans, hummus or roast vegetables to cut the salt." if veg_ok
+                    else f"Swap some of the {what} for roast chicken or smoked salmon to cut the salt."))
+
+    breads = [i for i in items if re.search(_BREAD, i.name.lower())]
+    if breads:
+        b = max(breads, key=lambda i: i.estimated_grams)
+        better = "a wholewheat pav or a multigrain bun" if indian else "a wholegrain or sourdough version"
+        out.append((15, f"Choose {better} instead of the {b.name.lower()} for more fiber and steadier energy."))
+    elif re.search(_REFINED, text):
+        out.append((12, "Choose wholegrain or brown versions of the bread, rice or pasta for more fiber."))
+
+    if totals["sodium_mg"] > 900:
+        top, mg = _top(items, "sodium_mg")
+        if top is not None and mg > 300:
+            out.append((totals["sodium_mg"] / 60, f"Most of the salt ({round(mg)} mg) comes from the {top.name.lower()}: "
+                                                  + ("go easy on it, or skip salty chutneys and pickles." if indian else "go easy on it, or skip salty sauces.")))
+
+    if totals["sugar_g"] > 20:
+        top, g = _top(items, "sugar_g")
+        if top is not None and g > 8:
+            if re.search(_SWEET, top.name.lower()):
+                out.append((g, f"Most of the sugar ({round(g)} g) comes from the {top.name.lower()}: "
+                               "have a smaller portion, or swap it for fresh fruit."))
+            else:
+                out.append((g / 2, f"The {top.name.lower()} adds about {round(g)} g of sugar; an unsweetened version cuts it."))
+
+    if totals["fiber_g"] < 4:
+        side = "kachumber salad, sprouts or a bowl of dal" if indian else "a side salad or a handful of vegetables"
+        out.append((10, f"Add {side} for fiber; this meal has only {round(totals['fiber_g'], 1)} g."
+                    if not re.search(_VEG_FRUIT, text) else
+                    f"Add beans, chickpeas or wholegrains: even with the vegetables, this meal has only "
+                    f"{round(totals['fiber_g'], 1)} g of fiber."))
+
     if totals["protein_g"] < 12:
-        out.append("Add a protein: eggs, yogurt, lentils, tofu or lean meat." if not veg_ok
-                   else "Add a protein: lentils, tofu, paneer, yogurt or eggs.")
-    return out[:3]
+        extra = "dal, paneer, curd or sprouts" if indian else (
+            "lentils, tofu, paneer, yogurt or eggs" if veg_ok else "eggs, yogurt, lentils, tofu or lean meat")
+        out.append((9, f"Add a protein such as {extra}."))
+
+    out.sort(key=lambda pair: -pair[0])
+    return [text for _, text in out[:3]]
