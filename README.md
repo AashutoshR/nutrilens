@@ -1,161 +1,200 @@
-# 🥗 NutriLens
+# NutriLens
 
-**Snap. Know. Nourish.** A multimodal AI nutrition assistant for the desktop. Add a photo of your meal and NutriLens:
+Take a photo of a meal and get its nutrition, allergens and recipe ideas.
 
-- **Identifies every food** on the plate with AI and estimates the portions
-- **Looks each food up in the USDA FoodData Central database** (~1.9 million foods), so calories, macros and 12 vitamins and
-  minerals come from real data, not AI guesses
-- **Flags allergens** (the 14 major allergens), including hidden ones like cashews in curry gravy, and warns loudly when a meal
-  contains something you avoid
-- **Checks your diet** (vegetarian, vegan, keto, halal, gluten-free and more)
-- **Finds nutrient gaps**. *Low in iron?* It shows the best iron sources and popular iron-rich dishes, filtered to your diet,
-  with your favourite cuisines first
-- **Picks recipes and meal plans** from ~500,000 real, rated Food.com recipes that respect your restrictions, with a shopping list
+NutriLens uses a vision model to recognise the foods in a photo, then looks each one up in USDA FoodData Central to
+work out calories, macros and micronutrients. It also checks the meal against your diet and allergies, points out
+nutrients you're short on, and suggests recipes and meal plans from a Food.com recipe collection.
 
-## How it works (RAG)
+## Features
 
-```
-photo ─► AI "look" step ─► list of foods + portions          (the only AI call: ~30 s on a laptop GPU, seconds with Claude)
-             │
-             ▼
-      retrieval: full-text search over USDA FoodData Central   (data/foods.db, SQLite FTS5, milliseconds)
-             │
-             ▼
-      compute: nutrients × grams, allergens, diet checks,       (rules in insights.py: instant, consistent)
-               health score, summary, swaps, nutrient gaps
-```
+- Food recognition from an uploaded file, a pasted image (Ctrl+V) or a webcam
+- Nutrition from USDA FoodData Central: calories, macros and 12 vitamins and minerals
+- Portion editing, switching a food's USDA match, and adding foods the AI missed, all recalculated instantly
+- Detection of the 14 major allergens, including likely hidden ones (e.g. cashews in curry sauces)
+- Diet checks: vegetarian, vegan, pescatarian, keto, paleo, gluten-free, dairy-free, halal, kosher and more
+- Nutrient gap suggestions, e.g. low iron shows iron-rich foods and dishes from your preferred cuisines
+- Recipe search and multi-day meal plans with a shopping list, filtered by allergens (including "may contain")
+- Daily log with a 7-day calorie history
 
-- The AI only has to *recognise* food, which small models do well and quickly. Every number is *retrieved* from USDA data.
-- Each food shows the USDA record it matched. Users can switch to another match, search the database, or add a food the AI missed;
-  everything recalculates instantly with no AI call.
-- Analyses run as background jobs: users can keep using the app and are notified when the meal is ready.
-- Recipes and meal plans are retrieved from the Food.com dataset (`data/recipes.db`) by cuisine, meal, ingredients on hand and
-  nutrient goals, filtered by the user's diet and allergens. Without that dataset, the AI writes recipes instead.
-
-## Desktop experience
-
-- **Sidebar navigation** with a live "today" calorie ring and scan progress; collapses to an icon rail (automatically below 1180 px wide)
-- **Three ways to add a photo:** upload or drag & drop a file, paste a screenshot/photo with **Ctrl+V**, or snap one with your **webcam**
-- **Two-panel results:** a sticky summary (photo, score, macros, Log button) beside the detailed nutrition, allergen and gap cards
-
-| Shortcut | Action |
-|---|---|
-| `Alt+1` … `Alt+5` | Scan · Today · Nutrient guide · Recipes · Profile |
-| `Ctrl+O` | Open a photo |
-| `Ctrl+V` | Paste an image from the clipboard |
-| `Enter` / `Esc` | Analyse the photo / start over |
-| `Space` | Capture (in the webcam window) |
-| `↑` `↓` | Browse nutrients in the guide |
-| `Ctrl+Enter` | Find recipes or build a meal plan |
-| `Ctrl+S` | Save your profile |
-
-## Architecture
+## How it works
 
 ```
-frontend/  React 18 + Vite        Scan · Today · Nutrients · Recipes · Profile
-backend/   FastAPI + SQLite
-   ├─ analysis.py   the RAG pipeline (look → retrieve → compute) and background jobs
-   ├─ foods.py      retrieval over USDA FoodData Central (data/foods.db)
-   ├─ recipes.py    recipe and meal-plan retrieval over Food.com (data/recipes.db)
-   ├─ insights.py   rules: allergens, diet checks, health score, summary, swaps
-   ├─ local.py      on-device AI through Ollama (free, private, offline)
-   ├─ ai.py         Claude API (optional, most accurate)
-   ├─ nutrition.py  portion scaling, DRI-based daily targets, %DV, nutrient gaps
-   ├─ knowledge.py  allergens, diets, cuisines, nutrient guides
-   └─ scripts/      build_food_db.py, build_recipe_db.py
+photo ──> vision model ──> list of foods + estimated portions
+                │
+                ▼
+          full-text search over USDA FoodData Central (SQLite FTS5)
+                │
+                ▼
+          nutrients x grams, allergens, diet checks, score, swaps
 ```
 
-## Run it
+The model is only asked to name the foods and estimate portions. All nutrition numbers come from the matched USDA
+records, and the allergen, diet and scoring logic is rule-based (`backend/app/insights.py`), so results are
+repeatable and every food shows which database record it came from.
 
-**Requirements:** Python 3.10+ and Node 18+. Double-click **`start.bat`** to set up and start everything, then open
-<http://localhost:8000>. Keep its window open while you use the app.
+Photo analysis runs as a background job, so the rest of the app stays usable while a photo is being processed.
 
-### 1. Build the food database (once, ~10 minutes)
+Supported vision backends:
 
-Download the USDA FoodData Central **Full Download (CSV)** from <https://fdc.nal.usda.gov/download-datasets/>
-(`FoodData_Central_csv_2026-04-30.zip`, ~460 MB) into `backend/data/raw/usda/`, then:
+| Provider | Setting | Notes |
+|---|---|---|
+| Ollama | `NUTRILENS_PROVIDER=local` | Runs on your machine; default model `gemma4:e4b` |
+| Google Gemini | `NUTRILENS_PROVIDER=gemini` | Free tier available; used for the hosted version |
+| Anthropic Claude | `NUTRILENS_PROVIDER=claude` | Paid; can also write recipes when no recipe database is installed |
+
+With Ollama as the provider and `GEMINI_API_KEY` set, a scan that takes longer than 45 seconds (for example because a
+game is using the GPU) falls back to Gemini.
+
+## Tech stack
+
+- Frontend: React 18, Vite
+- Backend: Python, FastAPI, SQLite (FTS5)
+- Data: USDA FoodData Central, Food.com Recipes and Reviews
+
+## Getting started
+
+### Prerequisites
+
+- Windows (the `start.bat` launcher; the app itself is cross-platform)
+- Python 3.10+
+- Node.js 18+
+- [Ollama](https://ollama.com) with a vision model, or a Gemini / Anthropic API key
+
+### Quick start
 
 ```bash
-cd backend
-.venv\Scripts\python scripts\build_food_db.py data\raw\usda\FoodData_Central_csv_2026-04-30.zip
+git clone https://github.com/AashutoshR/nutrilens.git
+cd nutrilens
 ```
 
-### 2. Build the recipe database (optional, ~5 minutes)
+Double-click `start.bat`. On first run it creates the Python virtual environment, unpacks the bundled data and builds
+the frontend, then serves the app at http://localhost:8000.
 
-Download **Food.com – Recipes and Reviews** from <https://www.kaggle.com/datasets/irkaal/foodcom-recipes-and-reviews>
-(free Kaggle account), then:
+### Food and recipe data
 
-```bash
-.venv\Scripts\python scripts\build_recipe_db.py %USERPROFILE%\Downloads\archive.zip
-```
+The repository ships a lite edition of the data in `backend/data-lite/`: the 13,602 generic USDA foods (no branded
+products) and 50,000 recipes. `start.bat` unpacks it into `backend/data/` if no databases are there yet.
 
-### 3. Set up the AI (app owner only; customers never see this)
+For the full datasets (about 1.9 million foods including branded products, and about 500,000 recipes):
 
-**Free, on-device (default):** install [Ollama](https://ollama.com) and run `ollama pull gemma4:e4b`, then in `backend/.env`:
+1. Download the FoodData Central "Full Download" CSV from https://fdc.nal.usda.gov/download-datasets/, then run:
+
+   ```bash
+   .venv\Scripts\python scripts\build_food_db.py path\to\FoodData_Central_csv_2026-04-30.zip
+   ```
+
+2. Download [Food.com Recipes and Reviews](https://www.kaggle.com/datasets/irkaal/foodcom-recipes-and-reviews) from Kaggle, then run:
+
+   ```bash
+   .venv\Scripts\python scripts\build_recipe_db.py path\to\archive.zip
+   ```
+
+`scripts/build_lite_data.py` regenerates `data-lite/` from the full databases.
+
+### Configuration
+
+Settings are read from environment variables or `backend/.env`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `NUTRILENS_PROVIDER` | `claude` | `local`, `gemini` or `claude` |
+| `NUTRILENS_LOCAL_MODEL` | `gemma4:e4b` | Ollama model used when the provider is `local` |
+| `NUTRILENS_LOCAL_DEVICE` | `gpu` | `gpu` or `cpu` |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
+| `GEMINI_API_KEY` | | Gemini key from https://aistudio.google.com/apikey |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model ID |
+| `ANTHROPIC_API_KEY` | | Claude key from https://console.anthropic.com |
+| `NUTRILENS_MODEL` | `claude-opus-5-5` | Claude model ID |
+| `NUTRILENS_DB` | `backend/nutrilens.db` | SQLite file for profiles and meal logs |
+| `NUTRILENS_PUBLIC` | off | Hosted mode: per-visitor data (cookie), admin endpoints disabled, scan rate limit |
+
+Example for local use with Ollama:
 
 ```
 NUTRILENS_PROVIDER=local
 NUTRILENS_LOCAL_MODEL=gemma4:e4b
-NUTRILENS_LOCAL_DEVICE=gpu      # or cpu, to leave the graphics card free for games
 ```
-
-**Claude (most accurate, paid):** set `NUTRILENS_PROVIDER=claude` and `ANTHROPIC_API_KEY=...` from
-<https://console.anthropic.com>. Admins can also use `PUT /api/settings/api-key` or `PUT /api/settings/local`.
-
-Without an AI, NutriLens never invents an analysis: it says photo analysis is unavailable. The nutrient guide, recipes and
-clearly labelled sample meals still work.
 
 ### Development
 
 ```bash
-cd backend && .venv\Scripts\uvicorn app.main:app --reload --port 8000
-cd frontend && npm install && npm run dev        # http://localhost:5173
+# backend (http://localhost:8000, API docs at /docs)
+cd backend
+.venv\Scripts\uvicorn app.main:app --reload --port 8000
+
+# frontend with hot reload (http://localhost:5173)
+cd frontend
+npm install
+npm run dev
 ```
 
-## Deploy to Render
+## Deployment
 
-The repository includes a `Dockerfile` and a `render.yaml` Blueprint for Render's free plan.
+The repo contains a `Dockerfile` and a Render Blueprint (`render.yaml`). The image bundles the lite data and runs in
+hosted mode with Gemini.
 
-- **Photos:** the hosted app uses Google Gemini (free tier) to recognise foods. Ollama can't run on Render.
-- **Data:** it ships `backend/data-lite/`, a small edition of the data: every generic USDA food (no branded
-  products) and the 50,000 best-reviewed recipes. Rebuild it with `python scripts/build_lite_data.py`.
-- **Visitors:** each visitor gets a private, anonymous profile and meal log through a cookie, with no sign-up.
-- **Locked settings:** the settings that change the AI are switched off on the hosted site.
+1. Create a Gemini API key.
+2. In Render, choose New > Blueprint and select this repository.
+3. Enter `GEMINI_API_KEY` when prompted.
 
-Steps:
+On Render's free plan the service sleeps after 15 minutes of inactivity, and the filesystem is reset on each restart or
+deploy, so saved profiles and meal logs are lost. Attach a persistent disk and point `NUTRILENS_DB` at it to keep them.
 
-1. Create a Gemini API key at https://aistudio.google.com/apikey.
-2. Push this repository to GitHub. A private repository works.
-3. In Render, choose **New > Blueprint**, pick the repository and paste the key into `GEMINI_API_KEY` when asked.
+## Project structure
 
-Free-plan limits:
-
-- The service sleeps after 15 minutes without visitors, and the first visit afterwards takes about a minute.
-- Its disk is wiped on every restart or deploy, so saved profiles and meal logs don't survive.
-- To keep profiles and meals, add a Render disk (paid) and set `NUTRILENS_DB` to a path on it.
+```
+backend/
+  app/
+    main.py          API routes
+    analysis.py      photo analysis pipeline and background jobs
+    foods.py         USDA food search and portion conversion
+    recipes.py       recipe search, allergen filtering, meal plans
+    insights.py      allergens, diet checks, health score, swaps
+    nutrition.py     daily targets and nutrient totals
+    knowledge.py     allergen, diet, cuisine and nutrient reference data
+    local.py         Ollama client
+    gemini.py        Gemini client
+    ai.py            Claude client
+    db.py            profiles and meal log (SQLite)
+  scripts/           database build scripts
+  data-lite/         bundled lite databases
+frontend/
+  src/
+    App.jsx          app shell and navigation
+    components/      pages (Scan, Today, Nutrient guide, Recipes, Profile) and shared UI
+Dockerfile
+render.yaml
+start.bat
+```
 
 ## API
 
-| Method | Path | Purpose |
+| Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/analyze` | Start analysing a meal photo (multipart `image`); returns a `job_id` |
-| `GET` | `/api/analyze/{job_id}` | Job progress (`looking` → `matching` → `done`), foods seen so far, and the result |
-| `POST` | `/api/describe` | Recompute nutrition and insights after portion or match edits (no AI) |
-| `GET` | `/api/foods/search?q=` | Search the food database (`&branded=true` to include branded products) |
-| `GET` | `/api/foods/{fdc_id}` · `/api/foods/barcode/{gtin}` | One food by USDA id or barcode |
-| `POST` | `/api/recipes` · `/api/meal-plan` | Recipes and meal plans for the user's profile |
-| `GET/PUT` | `/api/profile` | Diet, allergens, cuisines, calorie target, goal |
-| `POST/GET/DELETE` | `/api/meals` | Meal log |
-| `GET` | `/api/today` | Today's totals, %DV, remaining gaps, 7-day history |
-| `GET` | `/api/nutrients/{key}` | Food sources and popular dishes for a nutrient (e.g. `iron_mg`) |
-| `GET` | `/api/data/status` | Which databases are installed and how big they are |
+| `POST` | `/api/analyze` | Start analysing a photo (multipart field `image`); returns `job_id` |
+| `GET` | `/api/analyze/{job_id}` | Job status and result |
+| `POST` | `/api/describe` | Recalculate a meal after edits |
+| `GET` | `/api/foods/search?q=` | Search foods (`branded=true` to include branded products) |
+| `GET` | `/api/foods/{fdc_id}` | Food details |
+| `GET` | `/api/foods/barcode/{gtin}` | Look up a branded food by barcode |
+| `POST` | `/api/recipes` | Search recipes |
+| `GET` | `/api/recipes/{id}` | Full recipe |
+| `POST` | `/api/meal-plan` | Build a meal plan |
+| `GET`, `PUT` | `/api/profile` | User profile |
+| `GET`, `POST`, `DELETE` | `/api/meals` | Meal log |
+| `GET` | `/api/today` | Today's totals and 7-day history |
+| `GET` | `/api/nutrients/{key}` | Sources and dishes for a nutrient, e.g. `iron_mg` |
 
-Interactive docs: <http://localhost:8000/docs>
+Full interactive documentation is served at `/docs`.
 
-## Data sources and licences
+## Data sources
 
-- **USDA FoodData Central**: U.S. Department of Agriculture, Agricultural Research Service. <https://fdc.nal.usda.gov>
-- **Food.com Recipes and Reviews** (Kaggle, irkaal): check the dataset's licence before any commercial use.
+- [USDA FoodData Central](https://fdc.nal.usda.gov), U.S. Department of Agriculture, Agricultural Research Service
+- [Food.com Recipes and Reviews](https://www.kaggle.com/datasets/irkaal/foodcom-recipes-and-reviews) on Kaggle.
+  Check the dataset's terms before commercial use.
 
-> NutriLens provides estimates for general wellness and is not medical advice. Photos can't reveal every ingredient,
-> so people with severe allergies should always confirm with whoever prepared the food.
+## Disclaimer
+
+NutriLens gives estimates for general wellness and is not medical advice. A photo can't show every ingredient, so
+anyone with a severe allergy should confirm with whoever prepared the food.

@@ -10,6 +10,13 @@ if not exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python" -m pip install -q -r requirements.txt || goto :error
 )
 
+rem No databases yet: unpack the lite edition that ships with the repository.
+if not exist "data\foods.db" if exist "data-lite\foods.db.gz" (
+  echo Unpacking the bundled food and recipe data ^(first run only^)...
+  if not exist data mkdir data
+  ".venv\Scripts\python" -c "import gzip,shutil; [shutil.copyfileobj(gzip.open(f'data-lite/{n}.db.gz'), open(f'data/{n}.db','wb')) for n in ('foods','recipes')]" || goto :error
+)
+
 if not exist "%~dp0frontend\dist\index.html" (
   echo Building the interface ^(first run only^)...
   pushd "%~dp0frontend"
