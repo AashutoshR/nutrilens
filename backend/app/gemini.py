@@ -6,6 +6,7 @@ measurements. Nutrition still comes from the USDA data.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -84,6 +85,7 @@ async def structured(system: str, text: str, output: type[T], image_b64: str | N
         if r.status_code != 200:
             log.error("Gemini error %d: %s", r.status_code, r.text[:500])
             if r.status_code >= 500 and attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))  # "high demand" spells are usually brief
                 continue
             raise LocalAIError("The AI couldn't look at this photo. Please try again.", 502)
 

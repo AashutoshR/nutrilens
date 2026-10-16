@@ -70,19 +70,27 @@ If there is no food or drink in the photo, set is_food to false and return no it
 
 # A warm model on a free GPU answers in about 10 s; much longer means another app has the GPU.
 LOCAL_DEADLINE = 75
+# With Gemini as a backup, give up on the local model sooner, and skip it for a while after it was too slow.
+LOCAL_DEADLINE_WITH_BACKUP = 45
+SKIP_LOCAL_SECONDS = 15 * 60
+_local_slow_at = 0.0
 
 
 async def look(image: bytes, media_type: str) -> Perception:
     b64 = base64.standard_b64encode(image).decode("ascii")
-    if provider() == "local":
+    global _local_slow_at
+    backup = bool(gemini_key())
+    recently_slow = time.monotonic() - _local_slow_at < SKIP_LOCAL_SECONDS
+    if provider() == "local" and not (backup and recently_slow):
         try:
-            return await local.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64,
-                                          max_tokens=900, deadline=LOCAL_DEADLINE)
+            return await local.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64, max_tokens=900,
+                                          deadline=LOCAL_DEADLINE_WITH_BACKUP if backup else LOCAL_DEADLINE)
         except local.LocalAIError as e:
             # With a Gemini key set, a busy or stopped graphics card falls back to Gemini instead of failing.
-            if not gemini_key() or e.code not in ("local_slow", "local_offline", "local_out_of_memory"):
+            if not backup or e.code not in ("local_slow", "local_offline", "local_out_of_memory"):
                 raise
-            log.warning("Local AI unavailable (%s); using Gemini for this photo", e.code)
+            _local_slow_at = time.monotonic()
+            log.warning("Local AI unavailable (%s); using Gemini for the next %d minutes", e.code, SKIP_LOCAL_SECONDS // 60)
     if provider() in ("local", "gemini"):
         return await gemini.structured(LOOK_SYSTEM, "What foods are in this photo?", Perception, b64, media_type, 900)
     content = [
